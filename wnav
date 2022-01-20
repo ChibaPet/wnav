@@ -1,0 +1,199 @@
+#!/usr/bin/env perl
+
+# Copyright (c) 2011-2012 Mason Loring Bliss. All rights reserved.
+# 
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+# 1. Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+# 2. Redistributions in binary form must reproduce the above copyright
+#    notice, this list of conditions and the following disclaimer in the
+#    documentation and/or other materials provided with the distribution.
+# 3. The name of the author may not be used to endorse or promote products
+#    derived from this software without specific prior written permission.
+# 
+# THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+# IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+# OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+# IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
+# INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+# NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+# THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+use strict;
+use warnings;
+
+my $wmctrl = '/usr/bin/wmctrl';
+my $xprop = '/usr/bin/xprop';
+
+my $aw;
+my $ad;
+my $distance;
+my $target_x;
+my $target_y;
+my %w;
+
+if (! -f $xprop) {
+    print "Sorry, we need $xprop to continue.\n";
+    exit 1;
+}
+
+if (! -f $wmctrl) {
+    print "Sorry, we need $wmctrl to continue.\n";
+    exit 1;
+}
+
+my $command = shift || 'nothing';
+if ($command ne "left" && $command ne "right"
+    && $command ne "up" && $command ne "down") {
+    print "Sorry, need one of 'left', 'right', 'up', or 'down' to continue.\n";
+    exit 1;
+}
+
+# Find active window.
+open my $query, "$xprop -root|";
+while (<$query>) {
+    last if /^_NET_ACTIVE_WINDOW\(WINDOW\): /;
+}
+#(undef, undef, undef, undef, $aw) = split;
+$aw = (split)[4];
+close $query;
+$aw =~ s/,//g;
+$aw = sprintf("0x%08x", hex($aw));
+
+# Gather list of desktops, and note active desktop.
+open $query, "$wmctrl -d|";
+while (<$query>) {
+    my ($dnum, $starred, undef) = split;
+    if ($starred eq '*') {
+        $ad = $dnum;
+        last;
+    }
+}
+close $query;
+
+# Gather list of windows on the active desktop, and their geometry.
+# XXX consider excluding gnome-panel, etc. I believe this will involve
+# understanding struts, partial struts, etc.
+open $query, "$wmctrl -l -G|";
+while (<$query>) {
+    my ($win, $desktop, $x, $y, $w, $h, undef) = split;
+    next if $desktop ne $ad;
+
+    $w{$win}{x} = $x;
+    $w{$win}{y} = $y;
+    $w{$win}{w} = $w;
+    $w{$win}{h} = $h;
+}
+close $query;
+
+# Identify windows to consider.
+my %overlaps;
+my @potentials;
+if ($command eq 'left') {
+    @potentials = grep {$w{$_}{x} < $w{$aw}{x}} keys %w;
+} elsif ($command eq 'right') {
+    @potentials =
+            grep {$w{$_}{x} + $w{$_}{w} > $w{$aw}{x} + $w{$aw}{w}} keys %w;
+} elsif ($command eq 'up') {
+    @potentials = grep {$w{$_}{y} < $w{$aw}{y}} keys %w;
+} else { # $command eq 'down'
+    @potentials =
+            grep {$w{$_}{y} + $w{$_}{h} > $w{$aw}{y} + $w{$aw}{h}} keys %w;
+}
+
+# For each candidate window, characterize its strength as a candidate.
+for (@potentials) {
+
+    # Find x overlap, as a percentage of the active window width.
+
+    # Target overlaps active on both sides
+    if ($w{$_}{x} < $w{$aw}{x}
+            && $w{$_}{x} + $w{$_}{w} > $w{$aw}{x} + $w{$aw}{w}) {
+        $overlaps{$_}{x} = 1;
+
+    # Target is completely within active, horizontally.
+    } elsif ($w{$_}{x} > $w{$aw}{x}
+            && $w{$_}{x} + $w{$_}{w} < $w{$aw}{x} + $w{$aw}{w}) {
+        $overlaps{$_}{x} = $w{$_}{w} / $w{$aw}{w};
+
+    # Target crosses left border of active.
+    } elsif ($w{$_}{x} < $w{$aw}{x}) {
+        $overlaps{$_}{x} = (($w{$_}{x} + $w{$_}{w}) - $w{$aw}{x}) / $w{$aw}{w};
+
+    # Target crosses right border of active.
+    } else {
+        $overlaps{$_}{x} = (($w{$aw}{x} + $w{$aw}{w}) - $w{$_}{x}) / $w{$aw}{w};
+    }
+
+    # Find y overlap, as a percentage of the active window height.
+
+    # Target overlaps active on both top and bottom.
+    if ($w{$_}{y} < $w{$aw}{y}
+            && $w{$_}{y} + $w{$_}{h} > $w{$aw}{y} + $w{$aw}{h}) {
+        $overlaps{$_}{y} = 1;
+
+    # Target is completely within active, vertically.
+    } elsif ($w{$_}{y} > $w{$aw}{y}
+            && $w{$_}{y} + $w{$_}{h} < $w{$aw}{y} + $w{$aw}{h}) {
+        $overlaps{$_}{y} = $w{$_}{h} / $w{$aw}{h};
+
+    # Target crosses top border of active.
+    } elsif ($w{$_}{y} < $w{$aw}{y}) {
+        $overlaps{$_}{y} = (($w{$_}{y} + $w{$_}{h}) - $w{$aw}{y}) / $w{$aw}{h};
+
+    # Target crosses right border of active.
+    } else {
+        $overlaps{$_}{y} = (($w{$aw}{y} + $w{$aw}{h}) - $w{$_}{y}) / $w{$aw}{h};
+    }
+
+    # Modify overlap value, making it weaker for windows further away. For
+    # two windows with the same overlap value, the closer window will be
+    # selected. For windows touching or actually overlapping, do not weaken
+    # overlap value at all.
+
+    if ($command eq 'left') {
+        $distance = $w{$aw}{x} - ($w{$_}{x} + $w{$_}{w});
+        $distance = 1 if ($distance <= 0);
+        $overlaps{$_}{value} = $overlaps{$_}{y} * (1 / $distance);
+
+    } elsif ($command eq 'right') {
+        $distance = $w{$_}{x} - ($w{$aw}{x} + $w{$aw}{w});
+        $distance = 1 if ($distance <= 0);
+        $overlaps{$_}{value} = $overlaps{$_}{y} * (1 / $distance);
+
+    } elsif ($command eq 'up') {
+        $distance = $w{$aw}{y} - ($w{$_}{y} + $w{$_}{h});
+        $distance = 1 if ($distance <= 0);
+        $overlaps{$_}{value} = $overlaps{$_}{x} * (1 / $distance);
+
+    } elsif ($command eq 'down') {
+        $distance = $w{$_}{y} - ($w{$aw}{y} + $w{$aw}{h});
+        $distance = 1 if ($distance <= 0);
+        $overlaps{$_}{value} = $overlaps{$_}{x} * (1 / $distance);
+    }
+}
+
+# If there are potential windows, find the largest overlap value and send it an
+# activate event.
+if (@potentials) {
+    my $winner;
+    my $high_water_mark;
+    for (@potentials) {
+        $winner //= $_;
+        $high_water_mark //= $overlaps{$_}{value};
+        if ($overlaps{$_}{value} > $high_water_mark) {
+            $winner = $_;
+            $high_water_mark = $overlaps{$_}{value};
+        }
+    }
+    system("swarp "
+        . ($w{$winner}{x} + ($w{$winner}{w} / 2)) . " "
+        . ($w{$winner}{y} - 28));
+    system("$wmctrl -i -a $winner");
+}
+
