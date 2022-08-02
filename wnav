@@ -27,8 +27,8 @@
 use strict;
 use warnings;
 
-my $wmctrl = '/usr/bin/wmctrl';
-my $xprop = '/usr/bin/xprop';
+my $wmctrl = '/usr/bin/env wmctrl';
+my $xprop = '/usr/bin/env xprop';
 
 my $aw;
 my $ad;
@@ -36,16 +36,6 @@ my $distance;
 my $target_x;
 my $target_y;
 my %w;
-
-if (! -f $xprop) {
-    print "Sorry, we need $xprop to continue.\n";
-    exit 1;
-}
-
-if (! -f $wmctrl) {
-    print "Sorry, we need $wmctrl to continue.\n";
-    exit 1;
-}
 
 my $command = shift || 'nothing';
 if ($command ne "left" && $command ne "right"
@@ -193,7 +183,7 @@ if (@potentials) {
     }
     system("swarp "
         . ($w{$winner}{x} + ($w{$winner}{w} / 2)) . " "
-        . ($w{$winner}{y} - 28));
+        . ($w{$winner}{y} - 29));
     system("$wmctrl -i -a $winner");
 }
 
